@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 )
@@ -31,6 +32,12 @@ type Jieba struct {
 	jieba C.Jieba
 	freed int32
 }
+
+var (
+	sharedInstance     *Jieba
+	sharedInstanceOnce sync.Once
+	sharedInstanceLock sync.RWMutex
+)
 
 func NewJieba(paths ...string) *Jieba {
 	dictpaths := getDictPaths(paths...)
@@ -63,13 +70,58 @@ func NewJieba(paths ...string) *Jieba {
 	return jieba
 }
 
+// GetSharedInstance 返回一个共享的Jieba实例，可以显著减少内存使用
+//
+// 使用场景：
+// - 当你需要频繁创建和销毁Jieba实例时
+// - 当你的应用中多个地方需要使用分词功能时
+// - 当你希望减少内存占用时
+//
+// 注意事项：
+// - 共享实例是线程安全的，可以在多个goroutine中同时使用
+// - 不要对共享实例调用Free()方法
+// - 共享实例会在程序结束时自动释放
+// - 第一次调用时会创建实例，后续调用返回同一个实例
+//
+// 示例：
+//
+//	jieba := GetSharedInstance()
+//	words := jieba.Cut("我来到北京清华大学", true)
+//	// 不需要调用 jieba.Free()
+func GetSharedInstance(paths ...string) *Jieba {
+	sharedInstanceOnce.Do(func() {
+		sharedInstance = NewJieba(paths...)
+		// 移除finalizer，因为共享实例在程序生命周期内一直存在
+		runtime.SetFinalizer(sharedInstance, nil)
+	})
+
+	sharedInstanceLock.RLock()
+	defer sharedInstanceLock.RUnlock()
+
+	if atomic.LoadInt32(&sharedInstance.freed) != 0 {
+		panic("Shared Jieba instance has been freed")
+	}
+
+	return sharedInstance
+}
+
 func (x *Jieba) Free() {
 	if atomic.CompareAndSwapInt32(&x.freed, 0, 1) { // only free once
 		C.FreeJieba(x.jieba)
+		x.jieba = nil
+		// 清除finalizer，避免重复释放
+		runtime.SetFinalizer(x, nil)
+	}
+}
+
+func (x *Jieba) checkFreed() {
+	if atomic.LoadInt32(&x.freed) != 0 {
+		panic("Jieba instance has been freed")
 	}
 }
 
 func (x *Jieba) Cut(s string, hmm bool) []string {
+	x.checkFreed()
 	c_int_hmm := 0
 	if hmm {
 		c_int_hmm = 1
@@ -83,6 +135,7 @@ func (x *Jieba) Cut(s string, hmm bool) []string {
 }
 
 func (x *Jieba) CutAll(s string) []string {
+	x.checkFreed()
 	cstr := C.CString(s)
 	defer C.free(unsafe.Pointer(cstr))
 	var words **C.char = C.CutAll(x.jieba, cstr)
@@ -92,6 +145,7 @@ func (x *Jieba) CutAll(s string) []string {
 }
 
 func (x *Jieba) CutForSearch(s string, hmm bool) []string {
+	x.checkFreed()
 	c_int_hmm := 0
 	if hmm {
 		c_int_hmm = 1
@@ -105,6 +159,7 @@ func (x *Jieba) CutForSearch(s string, hmm bool) []string {
 }
 
 func (x *Jieba) Tag(s string) []string {
+	x.checkFreed()
 	cstr := C.CString(s)
 	defer C.free(unsafe.Pointer(cstr))
 	var words **C.char = C.Tag(x.jieba, cstr)

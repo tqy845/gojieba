@@ -320,3 +320,57 @@ func TestMemoryLeak(t *testing.T) {
 		t.Errorf("可能存在内存泄漏，Alloc增长了 %d KB", allocGrowth/1024)
 	}
 }
+
+func TestSharedInstance(t *testing.T) {
+	// 测试共享实例的内存效率
+	var m1, m2 runtime.MemStats
+
+	// 记录初始内存
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	t.Logf("初始内存: Alloc = %d KB, Sys = %d KB", m1.Alloc/1024, m1.Sys/1024)
+
+	// 多次获取共享实例
+	for i := 0; i < 20; i++ {
+		x := GetSharedInstance()
+
+		// 进行一些操作
+		text := "我来到北京清华大学学习计算机科学与技术专业"
+		for j := 0; j < 100; j++ {
+			_ = x.Cut(text, true)
+			_ = x.CutAll(text)
+		}
+
+		// 注意：不调用x.Free()，因为是共享实例
+		runtime.GC() // 强制垃圾回收
+
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		t.Logf("第%d次使用共享实例后内存: Alloc = %d KB, Sys = %d KB",
+			i+1, m.Alloc/1024, m.Sys/1024)
+	}
+
+	// 最终内存检查
+	runtime.GC()
+	runtime.ReadMemStats(&m2)
+	t.Logf("最终内存: Alloc = %d KB, Sys = %d KB", m2.Alloc/1024, m2.Sys/1024)
+
+	// 检查内存增长
+	allocGrowth := int64(m2.Alloc) - int64(m1.Alloc)
+	sysGrowth := int64(m2.Sys) - int64(m1.Sys)
+	t.Logf("内存增长: Alloc = %d KB, Sys = %d KB", allocGrowth/1024, sysGrowth/1024)
+}
+
+func ExampleGetSharedInstance() {
+	// 推荐的用法：使用共享实例
+	jieba := GetSharedInstance()
+
+	text := "我来到北京清华大学"
+	words := jieba.Cut(text, true)
+	fmt.Println("分词结果:", strings.Join(words, "/"))
+
+	// 不需要调用 jieba.Free()，共享实例会自动管理
+
+	// Output:
+	// 分词结果: 我/来到/北京/清华大学
+}
