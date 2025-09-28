@@ -275,3 +275,48 @@ func TestTypicalDoubleFree(t *testing.T) {
 
 	runtime.GC() // call GC to run finalizers
 }
+
+func TestMemoryLeak(t *testing.T) {
+	// 测试多次创建和释放是否有内存泄漏
+	var m1, m2 runtime.MemStats
+
+	// 记录初始内存
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	t.Logf("初始内存: Alloc = %d KB, Sys = %d KB", m1.Alloc/1024, m1.Sys/1024)
+
+	// 进行多次创建和释放
+	for i := 0; i < 20; i++ {
+		x := NewJieba()
+
+		// 进行一些操作
+		text := "我来到北京清华大学学习计算机科学与技术专业"
+		for j := 0; j < 100; j++ {
+			_ = x.Cut(text, true)
+			_ = x.CutAll(text)
+		}
+
+		x.Free()
+		runtime.GC() // 强制垃圾回收
+
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		t.Logf("第%d次循环后内存: Alloc = %d KB, Sys = %d KB",
+			i+1, m.Alloc/1024, m.Sys/1024)
+	}
+
+	// 最终内存检查
+	runtime.GC()
+	runtime.ReadMemStats(&m2)
+	t.Logf("最终内存: Alloc = %d KB, Sys = %d KB", m2.Alloc/1024, m2.Sys/1024)
+
+	// 检查内存增长
+	allocGrowth := int64(m2.Alloc) - int64(m1.Alloc)
+	sysGrowth := int64(m2.Sys) - int64(m1.Sys)
+	t.Logf("内存增长: Alloc = %d KB, Sys = %d KB", allocGrowth/1024, sysGrowth/1024)
+
+	// 如果内存增长超过10MB，可能存在泄漏
+	if allocGrowth > 10*1024*1024 {
+		t.Errorf("可能存在内存泄漏，Alloc增长了 %d KB", allocGrowth/1024)
+	}
+}
